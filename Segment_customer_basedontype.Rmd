@@ -1,0 +1,376 @@
+---
+title: "Scalend Internship Task"
+author: "Nimesh Katoriwala"
+date: "January 2, 2018"
+output: 
+  html_document:
+    toc: yes
+    toc_depth: 3
+    toc_float: yes
+---
+
+## Clean the enviornment
+```{r}
+rm(list = ls(all = T))
+```
+
+## Set the current working directory
+```{r}
+setwd("C:\\Users\\NY 5211\\Downloads\\INTERSHALA\\Scalend")
+```
+
+## Read the file from the 
+```{r}
+bank_data = read.csv("sample_data_test.csv", header = T, na.strings = "NULL")
+```
+
+## Summary Statistics for the data
+```{r}
+str(bank_data)
+summary(bank_data)
+head(bank_data)
+tail(bank_data)
+```
+
+## Checking for missing values
+```{r}
+sum(is.na(bank_data))
+colSums(is.na(bank_data)) ## Column wise missing values
+```
+
+## Remove those columns which has missing values. set 20% criteria
+```{r}
+bank_data = bank_data[, !(colSums(is.na(bank_data))==nrow(bank_data))]
+bank_data = bank_data[, !(colSums(is.na(bank_data))==nrow(bank_data) * 0.2)]
+sum(is.na(bank_data))
+
+```
+
+## Remove irrelevant columns
+```{r}
+bank_data$cid_no = NULL
+bank_data$transaction_id = NULL
+bank_data$transaction_type = NULL
+bank_data$date_of_birth = NULL
+bank_data$educational_status = NULL
+bank_data$marital_status = NULL
+```
+
+# Missing Values Imputation
+## Replace NAs by new level "Others" for SEX column
+```{r}
+lvl = levels(bank_data$sex)
+lvl[length(lvl) + 1] = "Other"
+
+bank_data$sex = factor(bank_data$sex, levels = lvl)
+bank_data$sex[is.na(bank_data$sex)] = "Other"
+
+```
+
+## Replace NAs by ny level "Own Income" for INCOME column
+```{r}
+lvl_incom = levels(bank_data$income)
+lvl_incom[length(lvl_incom)+1] = "Own Income"
+
+bank_data$income = factor(bank_data$income, levels = lvl_incom)
+bank_data$income[is.na(bank_data$income)] = "Own Income"
+
+```
+
+## Replace NAs by "N" for MINORITY COlumn
+```{r}
+bank_data$minor[is.na(bank_data$minor)] = "N"
+```
+
+## After the imputation, looking at the data
+```{r}
+str(bank_data)
+summary(bank_data)
+```
+
+## Type Conversion,  
+* Convert dependents column from numeric to categorical
+```{r}
+bank_data$dependents = as.factor(bank_data$dependents)
+```
+
+## Date Conversion
+* Subtract transaction date to current date and find out total number of days
+```{r}
+bank_data$transaction_datetime = as.Date(bank_data$transaction_datetime, format = "%m/%d/%Y")
+tot_days = as.numeric(Sys.Date() - bank_data$transaction_datetime)
+bank_data$transaction_datetime = NULL ## Remove Date from the dataset
+bank_data = data.frame(bank_data, tot_days) ## Add total days to the dataset
+
+```
+
+## Type Conversion,  Categorical to numeric for clustering
+```{r}
+library(dummies)
+factor_type = bank_data[, sapply(bank_data, is.factor)]
+factor_type = sapply(factor_type, dummy)
+num_data = bank_data[, setdiff(names(bank_data), names(factor_type))]
+new_data = data.frame(num_data,factor_type)
+```
+
+## Standardization
+* The data must be scaled, before measuring any type of distance metric as the variables with higher ranges will significantly influence the distance
+
+```{r}
+num = c("transaction_amount", "transaction_location", "tot_days")
+num_attr = new_data[,num]
+num_attr = scale(num_attr, scale = T, center = T)
+
+new_data$transaction_amount = NULL
+new_data$transaction_location = NULL
+new_data$tot_days = NULL
+
+new_data = data.frame(new_data, num_attr)
+```
+## Data Exploration
+
+* We can use the fviz_dist() function from the factoextra package, to visualize the distances between the observations
+```{r, message= FALSE}
+
+# if install.packages("factoextra") doesn't work, use the following
+# if(!require(devtools)) install.packages("devtools")
+# devtools::install_github("kassambara/factoextra")
+
+library(factoextra)
+# Use the get_dist() function from the factoexrtra to calculate inter-observation distances
+#distance <- get_dist(new_data)
+
+# The fviz_dist() function plots a visual representation of the inter-observation distances
+#fviz_dist(distance, gradient = list(low = "chocolate", mid = "white", high = "coral4"))
+# The gradient argument, helps us define the color range for the distance scale
+```
+
+# Hirerachical Clustering
+* Let's now perform hierarchical clustering using the hclust() function, for which we'll first need to calculate the distance measures
+```{r}
+dist <- dist(new_data, method = "euclidean")
+
+hc_fit <- hclust(dist, method = "ward.D2")
+```
+
+* We can display the dendogram for hierarchical clustering, using the plot() function
+```{r, fig.height=8, fig.width=14}
+plot(hc_fit)
+rect.hclust(hc_fit, k = 3, border = "red")
+```
+
+* Cut the tree to 6 clusters, using the cutree() function
+```{r}
+points_hc <- cutree(hc_fit, k = 3)
+
+# Store the clusters in a data frame along with the cereals data
+bank_clusts_hc <- cbind(points_hc, new_data)
+
+# Have a look at the head of the new data frame
+colnames(bank_clusts_hc)[1] <- "cluster_hc"
+#head(bank_clusts_hc)
+```
+
+## Quality of Clusters Created
+
+* Shiloutte value
+
+    - The silhouette value is a measure of how similar an object is to its own cluster (cohesion) compared to other clusters (separation)  [i.e., intra-cluster cohesion and inter-cluster separation]
+    - Ranges from -1 to +1  
+    - Values closer to 1 means higher quality of the cluster created 
+```{r}
+library(cluster)
+dist = daisy(x = new_data, metric = "euclidean")
+
+sil_value = silhouette(points_hc, dist = dist)
+plot(sil_value)
+```
+
+* Try to find the optimal number of clusters where silhouette width would be maximum
+```{r}
+sil_value_hc = 0
+for (i in 2:20) {
+  points_hc <- cutree(hc_fit, k = i)
+  sil_value_hc[i] = mean(silhouette(points_hc, dist = dist)[,3])
+}
+plot(1:20, sil_value_hc, type = "b", xlab = "No: of Clusters", ylab = "Silhouette Width")
+```
+
+## Cluster Stability
+* Using library(fpc) - clusterboot function
+```{r}
+library(fpc)
+
+#Input the scaled cereals_data
+hclust_stability = clusterboot(new_data, clustermethod=hclustCBI, method="ward.D2", k=3, count = FALSE)
+#hclust_stability
+```
+
+* Analyze the clustering results  
+```{r}
+clusters = hclust_stability$result$partition
+```
+
+* What are the cluster stabiltiy values? Values > 0.85 denote very stable clusters. 0.6 - 0.75 means the clusters show some patterns but needs to be investigated further
+
+```{r}
+#Cluster stability values
+hclust_stability$bootmean 
+```
+
+* How many times the different clusters were dissolved  
+```{r}
+#Cluster dissolution rate. If maximum Jaccard coefficient < 0.5, that cluster is assumed to be dissolved. Below code shows the number of times each cluster was dissolved. The lower the value, the better.
+hclust_stability$bootbrd 
+```
+
+## 2. Mixed attributes - distance measure as 'gower'
+
+### Hierarchical Clustering procedure - mixed attributes
+
+* Let's now perform same hierarchical clustering using the hclust() function, for mixed datatypes
+```{r}
+#Calculating gower distance
+gower_dist = daisy(new_data,metric = "gower")
+head(gower_dist)
+
+hc_fit_mixed <- hclust(gower_dist, method = "ward.D2")
+```
+
+* We can display the dendogram for hierarchical clustering, using the plot() function
+
+```{r, fig.height=8, fig.width=14}
+plot(hc_fit_mixed )
+```
+
+* Cut the tree to 6 clusters, using the cutree() function
+
+```{r}
+points_hc_mixed <- cutree(hc_fit_mixed , k = 3)
+
+# Store the clusters in a data frame along with the cereals data
+bank_clusts_hc_mixed <- cbind(points_hc_mixed, new_data)
+
+# Have a look at the head of the new data frame
+colnames(bank_clusts_hc_mixed)[1] <- "cluster_hc_mixed"
+#head(bank_clusts_hc_mixed)
+```
+
+* Plot a new dendogram, with each of the clusters being surrounded by a border, using the rect.hclust() function
+
+```{r, fig.height=8, fig.width=14}
+plot(hc_fit_mixed)
+rect.hclust(hc_fit_mixed, k = 3, border = "red")
+```
+
+#### Check Quality of Mixed Clusters Created
+
+* Shiloutte value - mixed
+
+```{r}
+gower_dist = daisy(x = new_data, metric = "gower")
+
+sil_value_hc_mixed = silhouette(points_hc_mixed, dist = gower_dist)
+plot(sil_value_hc_mixed)
+```
+
+# K-Means Clustering
+
+#### K-Means Clustering procedure
+
+* Build a basic kmeans model with k = 3, using the kmeans() function
+
+```{r}
+set.seed(123)
+km_basic <- kmeans(new_data, centers = 3, nstart = 20)
+
+str(km_basic)
+fviz_cluster(km_basic, new_data)
+```
+
+* Let's now build a screen plot to choose a "k"
+```{r}
+# Initialize wss to 0
+wss <- 0
+
+# From 1 upto upto 10 cluster centers, fit the kmeans model
+for (i in 1:20) {
+  cfit = kmeans(new_data, centers = i, nstart = 20)
+  # Store the sum of within sum of square
+  wss[i] <- sum(cfit$withinss)
+}
+plot(1:20, wss, type = "b")
+
+set.seed(123)
+fviz_nbclust(new_data, kmeans, method = "wss")
+```
+
+* Let's choose k as 8 based on the scree plot and cluster the data
+
+```{r}
+set.seed(123)
+km_clust <- kmeans(new_data, 8)
+#Not using 'nstart' parameter for reproducability during cluster stability checking. Initial centriods would be chosen based on set seed here.
+
+# after choosing k as 6, let's store the cluster groupings along with the data in a new data frame
+km_points <- km_clust$cluster
+
+# Store the cluster assignments in a new data frame
+kmean_clusts_km <- as.data.frame(cbind(km_clust$cluster, new_data))
+
+# Look at the head of the data
+head(kmean_clusts_km)
+
+colnames(kmean_clusts_km)[1] <- "cluster_km"
+```
+
+* We can visualise the clusters by plotting the data using the fviz_cluster() function which plots the points on the first two principal components
+
+```{r, fig.height=8, fig.width=14}
+fviz_cluster(km_clust, new_data)
+```
+
+### K-Means Cluster Quality
+
+* Shiloutte value
+```{r}
+dist = daisy(x = new_data, metric = "euclidean")
+
+sil_value = silhouette(km_clust$cluster, dist = dist)
+plot(sil_value)
+```
+
+#### Cluster Stability in kmeans
+
+* Using library(fpc) - clusterboot function
+
+```{r}
+library(fpc)
+
+#Input the scaled cereals_data
+#Input the samee seeds used above for reproducability of clustering performed
+km_stability <- clusterboot(new_data, clustermethod=kmeansCBI,krange = 8, seed = 123, count = FALSE)
+km_stability
+#km_stability$result[1]
+```
+
+* Analyze the clustering results  
+
+```{r}
+groups_km = km_stability$result$partition 
+#groups_km
+```
+
+* What are the cluster stabiltiy values? Values > 0.85 denote very stable clusters. 0.6 - 0.75 means the clusters show some patterns but needs to be investigated more  
+
+```{r}
+#Cluster stability values
+km_stability$bootmean 
+```
+
+* How many times the different clusters were dissolved  
+
+```{r}
+#Cluster dissolution rate. 
+km_stability$bootbrd 
+```
